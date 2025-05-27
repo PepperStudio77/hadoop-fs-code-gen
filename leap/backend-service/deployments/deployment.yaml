@@ -1,0 +1,233 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sas-service
+  namespace: default
+  labels:
+    app: sas-service
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: sas-service
+  template:
+    metadata:
+      labels:
+        app: sas-service
+    spec:
+      serviceAccountName: spark-sas-service
+      containers:
+      - name: sas-service
+        image: sas-service:latest
+        ports:
+        - containerPort: 8080
+          name: http
+        env:
+        - name: SERVER_PORT
+          value: "8080"
+        - name: K8S_IN_CLUSTER
+          value: "true"
+        - name: K8S_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: AWS_REGION
+          value: "us-west-2"
+        - name: AWS_ACCESS_KEY_ID
+          valueFrom:
+            secretKeyRef:
+              name: aws-credentials
+              key: access-key-id
+              optional: true
+        - name: AWS_SECRET_ACCESS_KEY
+          valueFrom:
+            secretKeyRef:
+              name: aws-credentials
+              key: secret-access-key
+              optional: true
+        - name: AZURE_ACCOUNT_NAME
+          valueFrom:
+            secretKeyRef:
+              name: azure-credentials
+              key: account-name
+              optional: true
+        - name: AZURE_ACCOUNT_KEY
+          valueFrom:
+            secretKeyRef:
+              name: azure-credentials
+              key: account-key
+              optional: true
+        volumeMounts:
+        - name: config
+          mountPath: /app/configs
+          readOnly: true
+        - name: policies
+          mountPath: /app/policies
+          readOnly: true
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+      volumes:
+      - name: config
+        configMap:
+          name: sas-service-config
+      - name: policies
+        configMap:
+          name: sas-service-policies
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sas-service
+  namespace: default
+  labels:
+    app: sas-service
+spec:
+  selector:
+    app: sas-service
+  ports:
+  - name: http
+    port: 8080
+    targetPort: 8080
+  type: ClusterIP
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: spark-sas-service
+  namespace: default
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: sas-service-role
+rules:
+- apiGroups: ["authentication.k8s.io"]
+  resources: ["tokenreviews"]
+  verbs: ["create"]
+- apiGroups: ["authorization.k8s.io"]
+  resources: ["subjectaccessreviews"]
+  verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: sas-service-binding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: sas-service-role
+subjects:
+- kind: ServiceAccount
+  name: spark-sas-service
+  namespace: default
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sas-service-config
+  namespace: default
+data:
+  config.yaml: |
+    server:
+      port: "8080"
+      host: "0.0.0.0"
+    
+    k8s:
+      in_cluster: true
+      namespace: "default"
+      service_account: "spark-sas-service"
+    
+    storage:
+      aws:
+        region: "us-west-2"
+      azure:
+        container_name: "spark-data"
+    
+    rego:
+      policy_path: "./policies"
+      data_path: "./data"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sas-service-policies
+  namespace: default
+data:
+  spark_access.rego: |
+    package authz
+    
+    import future.keywords.if
+    import future.keywords.in
+    
+    # Default deny
+    default allow := false
+    
+    # Allow read access to data in the user's namespace
+    allow if {
+        input.operation == "read"
+        input.user.namespace == extract_namespace_from_path(input.resource)
+    }
+    
+    # Allow write access to data in the user's namespace for specific service accounts
+    allow if {
+        input.operation == "write"
+        input.user.namespace == extract_namespace_from_path(input.resource)
+        input.user.service_account in ["spark-driver", "spark-executor"]
+    }
+    
+    # Allow delete access only for admin service accounts
+    allow if {
+        input.operation == "delete"
+        input.user.service_account in ["spark-admin"]
+    }
+    
+    # Allow access to shared data for all authenticated users
+    allow if {
+        startswith(input.resource, "s3://shared-bucket/")
+        input.operation == "read"
+    }
+    
+    # Allow access to public datasets
+    allow if {
+        startswith(input.resource, "s3://public-datasets/")
+        input.operation == "read"
+    }
+    
+    # Helper function to extract namespace from resource path
+    extract_namespace_from_path(path) := namespace if {
+        # Extract namespace from path like s3://bucket/namespace/data/file.parquet
+        parts := split(trim_prefix(path, "s3://"), "/")
+        count(parts) >= 2
+        namespace := parts[1]
+    }
+    
+    extract_namespace_from_path(path) := namespace if {
+        # Extract namespace from Azure path like abfs://container@account.dfs.core.windows.net/namespace/data/file.parquet
+        contains(path, "abfs://")
+        url_parts := split(path, "/")
+        count(url_parts) >= 4
+        namespace := url_parts[3]
+    }
+    
+    # Default to empty namespace if can't extract
+    extract_namespace_from_path(path) := "" if {
+        not startswith(path, "s3://")
+        not contains(path, "abfs://")
+    } 

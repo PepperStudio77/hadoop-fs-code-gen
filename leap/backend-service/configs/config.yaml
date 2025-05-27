@@ -1,0 +1,26 @@
+server:
+  port: "8080"
+  host: "0.0.0.0"
+
+k8s:
+  in_cluster: true
+  namespace: "default"
+  service_account: "spark-sas-service"
+
+storage:
+  aws:
+    region: "us-west-2"
+    # These should be set via environment variables in production
+    # access_key_id: ""
+    # secret_access_key: ""
+    # session_token: ""
+  
+  azure:
+    # These should be set via environment variables in production
+    # account_name: ""
+    # account_key: ""
+    container_name: "spark-data"
+
+rego:
+  policy_path: "./policies"
+  data_path: "./data" 

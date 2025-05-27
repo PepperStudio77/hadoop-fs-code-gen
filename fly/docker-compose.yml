@@ -1,0 +1,115 @@
+version: '3.8'
+
+services:
+  # Policy Management API
+  policy-api:
+    image: spark-abac/policy-api:latest
+    ports:
+      - "8080:8080"
+    environment:
+      - SPRING_PROFILES_ACTIVE=docker
+      - DATABASE_URL=jdbc:postgresql://postgres:5432/abac_policies
+      - DATABASE_USERNAME=abac_user
+      - DATABASE_PASSWORD=abac_password
+    depends_on:
+      - postgres
+    volumes:
+      - ./config/policy-api:/app/config
+    networks:
+      - abac-network
+
+  # Authentication Service
+  auth-service:
+    image: spark-abac/auth-service:latest
+    ports:
+      - "8081:8081"
+    environment:
+      - SPRING_PROFILES_ACTIVE=docker
+      - LDAP_URL=ldap://ldap:389
+      - LDAP_BASE_DN=dc=example,dc=com
+    depends_on:
+      - ldap
+    volumes:
+      - ./config/auth-service:/app/config
+    networks:
+      - abac-network
+
+  # PostgreSQL Database for Policies
+  postgres:
+    image: postgres:13
+    environment:
+      - POSTGRES_DB=abac_policies
+      - POSTGRES_USER=abac_user
+      - POSTGRES_PASSWORD=abac_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./config/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - abac-network
+
+  # LDAP Server for User Authentication
+  ldap:
+    image: osixia/openldap:1.5.0
+    environment:
+      - LDAP_ORGANISATION=Example Corp
+      - LDAP_DOMAIN=example.com
+      - LDAP_ADMIN_PASSWORD=admin
+    volumes:
+      - ldap_data:/var/lib/ldap
+      - ldap_config:/etc/ldap/slapd.d
+      - ./config/ldap/users.ldif:/container/service/slapd/assets/config/bootstrap/ldif/50-users.ldif
+    networks:
+      - abac-network
+
+  # Redis for Decision Caching
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - abac-network
+
+  # Spark Master (for testing)
+  spark-master:
+    image: apache/spark:3.4.1
+    command: /opt/spark/bin/spark-class org.apache.spark.deploy.master.Master
+    ports:
+      - "8080:8080"
+      - "7077:7077"
+    environment:
+      - SPARK_MASTER_HOST=spark-master
+      - SPARK_MASTER_PORT=7077
+      - SPARK_MASTER_WEBUI_PORT=8080
+    volumes:
+      - ./target/jars:/opt/spark/jars/abac
+      - ./config/spark:/opt/spark/conf
+    networks:
+      - abac-network
+
+  # Spark Worker (for testing)
+  spark-worker:
+    image: apache/spark:3.4.1
+    command: /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker spark://spark-master:7077
+    depends_on:
+      - spark-master
+    environment:
+      - SPARK_MASTER=spark://spark-master:7077
+      - SPARK_WORKER_CORES=2
+      - SPARK_WORKER_MEMORY=2g
+    volumes:
+      - ./target/jars:/opt/spark/jars/abac
+      - ./config/spark:/opt/spark/conf
+    networks:
+      - abac-network
+
+volumes:
+  postgres_data:
+  ldap_data:
+  ldap_config:
+  redis_data:
+
+networks:
+  abac-network:
+    driver: bridge 

@@ -1,0 +1,89 @@
+{
+  "id": "policy-001",
+  "name": "Department Data Access Policy",
+  "description": "Controls access to department-specific data based on user attributes",
+  "version": "1.0",
+  "enabled": true,
+  "priority": 100,
+  "defaultEffect": "DENY",
+  "target": {
+    "resources": ["s3://data-lake/departments/*"],
+    "actions": ["read", "query"],
+    "subjects": ["*"]
+  },
+  "rules": [
+    {
+      "id": "rule-001",
+      "name": "Allow HR Department Access",
+      "description": "HR users can access HR department data",
+      "enabled": true,
+      "priority": 10,
+      "effect": "PERMIT",
+      "target": {
+        "resources": ["s3://data-lake/departments/hr/*"],
+        "actions": ["read", "query"],
+        "subjects": ["*"]
+      },
+      "conditions": [
+        {
+          "attributeName": "user.department",
+          "operator": "EQUALS",
+          "expectedValue": "HR"
+        },
+        {
+          "expression": "T(java.time.LocalTime).now().getHour() >= 8 && T(java.time.LocalTime).now().getHour() <= 18"
+        }
+      ]
+    },
+    {
+      "id": "rule-002",
+      "name": "Allow Finance Department Access",
+      "description": "Finance users can access finance department data",
+      "enabled": true,
+      "priority": 10,
+      "effect": "PERMIT",
+      "target": {
+        "resources": ["s3://data-lake/departments/finance/*"],
+        "actions": ["read", "query"],
+        "subjects": ["*"]
+      },
+      "conditions": [
+        {
+          "attributeName": "user.department",
+          "operator": "EQUALS",
+          "expectedValue": "Finance"
+        },
+        {
+          "attributeName": "user.clearanceLevel",
+          "operator": "GREATER_THAN_OR_EQUAL",
+          "expectedValue": 3
+        }
+      ]
+    },
+    {
+      "id": "rule-003",
+      "name": "Allow Cross-Department Access for Managers",
+      "description": "Managers can access data from multiple departments",
+      "enabled": true,
+      "priority": 5,
+      "effect": "PERMIT",
+      "target": {
+        "resources": ["s3://data-lake/departments/*"],
+        "actions": ["read", "query"],
+        "subjects": ["*"]
+      },
+      "conditions": [
+        {
+          "attributeName": "user.role",
+          "operator": "EQUALS",
+          "expectedValue": "Manager"
+        },
+        {
+          "attributeName": "user.clearanceLevel",
+          "operator": "GREATER_THAN_OR_EQUAL",
+          "expectedValue": 4
+        }
+      ]
+    }
+  ]
+} 
