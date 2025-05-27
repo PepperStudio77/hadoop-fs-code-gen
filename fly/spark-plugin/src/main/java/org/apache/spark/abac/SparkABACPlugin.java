@@ -8,6 +8,7 @@ import org.apache.spark.api.plugin.SparkPlugin;
 import org.apache.spark.abac.engine.ABACEngine;
 import org.apache.spark.abac.service.PolicyServiceClient;
 import org.apache.spark.abac.service.SessionManager;
+import org.apache.spark.abac.enforcement.SparkCatalystInterceptor;
 import org.apache.spark.internal.Logging;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -76,7 +77,31 @@ public class SparkABACPlugin implements SparkPlugin {
         private void registerSQLHooks(SparkContext sc) {
             // Register hooks for intercepting SQL queries and data access
             logger.info("Registering SQL hooks for ABAC enforcement");
-            // This will be implemented to intercept Catalyst plan execution
+            
+            try {
+                // Get the Spark session from the context
+                SparkSession spark = SparkSession.builder().sparkContext(sc).getOrCreate();
+                
+                // Create the ABAC Catalyst interceptor
+                SparkCatalystInterceptor abacInterceptor = new SparkCatalystInterceptor(abacEngine, sessionManager);
+                
+                // Add the interceptor to Spark's session state
+                // This hooks into Catalyst's rule-based optimization engine
+                spark.sessionState().analyzer().batches().foreach(batch -> {
+                    // Add our ABAC rule to the resolution batch (before other optimizations)
+                    if (batch.name().equals("Resolution")) {
+                        batch.rules().append(abacInterceptor);
+                        logger.info("ABAC interceptor added to Catalyst Resolution batch");
+                    }
+                    return null;
+                });
+                
+                logger.info("Successfully registered ABAC Catalyst interceptor");
+                
+            } catch (Exception e) {
+                logger.error("Failed to register SQL hooks for ABAC enforcement", e);
+                throw new RuntimeException("Could not register ABAC SQL hooks", e);
+            }
         }
     }
 
